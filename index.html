@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>mynote</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Georgia', 'Noto Serif JP', serif;
+    background: #f9f7f4;
+    color: #2c2c2c;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 60px 24px 120px;
+  }
+
+  header {
+    width: 100%;
+    max-width: 680px;
+    margin-bottom: 40px;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+  }
+
+  header h1 {
+    font-size: 1.1rem;
+    font-weight: 400;
+    letter-spacing: 0.12em;
+    color: #888;
+  }
+
+  header .hint {
+    font-size: 0.75rem;
+    color: #bbb;
+    letter-spacing: 0.04em;
+  }
+
+  #note {
+    width: 100%;
+    max-width: 680px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .para-wrap {
+    position: relative;
+    border-radius: 4px;
+    transition: background 0.15s;
+  }
+
+  .para-wrap:focus-within {
+    background: #fff;
+    box-shadow: 0 1px 8px rgba(0,0,0,0.06);
+  }
+
+  /* ドラッグハンドル */
+  .drag-handle {
+    position: absolute;
+    left: -28px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 20px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+    opacity: 0;
+    transition: opacity 0.15s;
+    color: #ccc;
+    font-size: 14px;
+    user-select: none;
+  }
+
+  .para-wrap:focus-within .drag-handle,
+  .para-wrap.focused .drag-handle {
+    opacity: 1;
+  }
+
+  .drag-handle:active {
+    cursor: grabbing;
+  }
+
+  /* 段落本体 */
+  .para {
+    min-height: 2.2em;
+    padding: 10px 14px;
+    border-radius: 4px;
+    line-height: 1.85;
+    font-size: 1rem;
+    outline: none;
+    white-space: pre-wrap;
+    word-break: break-word;
+    cursor: default;
+    border: 1.5px solid transparent;
+    transition: border-color 0.15s;
+    color: #2c2c2c;
+  }
+
+  /* フォーカス時 (閲覧モード) */
+  .para-wrap.focused > .para {
+    border-color: #d4cfc9;
+    background: #fff;
+    cursor: default;
+  }
+
+  /* 編集モード */
+  .para[contenteditable="true"] {
+    cursor: text;
+    border-color: #8b7fc0;
+    background: #fff;
+    box-shadow: 0 0 0 3px rgba(139,127,192,0.12);
+  }
+
+  /* 空段落プレースホルダ */
+  .para:empty::before {
+    content: attr(data-placeholder);
+    color: #ccc;
+    pointer-events: none;
+  }
+
+  /* ドラッグ中のスタイル */
+  .para-wrap.dragging {
+    opacity: 0.35;
+  }
+
+  .para-wrap.drag-over {
+    border-top: 2px solid #8b7fc0;
+  }
+
+  /* 追加ボタン */
+  #add-para {
+    width: 100%;
+    max-width: 680px;
+    margin-top: 12px;
+    padding: 10px;
+    background: none;
+    border: 1.5px dashed #ddd;
+    border-radius: 4px;
+    color: #bbb;
+    font-size: 0.85rem;
+    cursor: pointer;
+    letter-spacing: 0.06em;
+    transition: border-color 0.15s, color 0.15s;
+  }
+
+  #add-para:hover {
+    border-color: #8b7fc0;
+    color: #8b7fc0;
+  }
+
+  /* モードバッジ */
+  .mode-badge {
+    position: fixed;
+    bottom: 24px;
+    right: 28px;
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    padding: 4px 10px;
+    border-radius: 20px;
+    background: #f0edf8;
+    color: #8b7fc0;
+    border: 1px solid #d8d3ef;
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+  }
+
+  .mode-badge.visible {
+    opacity: 1;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>mynote</h1>
+  <span class="hint">フォーカス → Enter / ダブルクリックで編集 · Escape で閲覧に戻る · ドラッグで並び替え</span>
+</header>
+
+<div id="note"></div>
+<button id="add-para">＋ 段落を追加</button>
+<div class="mode-badge" id="mode-badge">EDIT</div>
+
+<script>
+(() => {
+  const note = document.getElementById('note');
+  const badge = document.getElementById('mode-badge');
+  let badgeTimer = null;
+
+  const defaultParas = [
+    'ここはメモツールです。段落にフォーカスを当て、Enter またはダブルクリックで編集モードに入ります。',
+    '編集を終えるには Escape を押すか、別の段落をクリックしてください。',
+    '段落左のハンドル（⠿）をドラッグすると順序を入れ替えられます。',
+    '',
+  ];
+
+  function showBadge(text) {
+    badge.textContent = text;
+    badge.classList.add('visible');
+    clearTimeout(badgeTimer);
+    badgeTimer = setTimeout(() => badge.classList.remove('visible'), 1200);
+  }
+
+  function createPara(text = '') {
+    const wrap = document.createElement('div');
+    wrap.className = 'para-wrap';
+    wrap.setAttribute('tabindex', '-1');
+
+    const handle = document.createElement('div');
+    handle.className = 'drag-handle';
+    handle.textContent = '⠿';
+    handle.setAttribute('draggable', 'true');
+    handle.title = 'ドラッグして並び替え';
+
+    const p = document.createElement('div');
+    p.className = 'para';
+    p.setAttribute('contenteditable', 'false');
+    p.setAttribute('data-placeholder', '空の段落...');
+    p.textContent = text;
+
+    // --- フォーカス管理 ---
+    wrap.addEventListener('focus', () => {
+      wrap.classList.add('focused');
+    }, true);
+
+    wrap.addEventListener('blur', (e) => {
+      if (!wrap.contains(e.relatedTarget)) {
+        wrap.classList.remove('focused');
+        exitEdit(p);
+      }
+    }, true);
+
+    // --- 閲覧モードでのキー操作 ---
+    p.addEventListener('keydown', (e) => {
+      if (p.getAttribute('contenteditable') === 'false') {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          enterEdit(p);
+        }
+        if (e.key === 'ArrowDown' || e.key === 'j') {
+          e.preventDefault();
+          const next = wrap.nextElementSibling;
+          if (next && next.classList.contains('para-wrap')) next.querySelector('.para').focus();
+        }
+        if (e.key === 'ArrowUp' || e.key === 'k') {
+          e.preventDefault();
+          const prev = wrap.previousElementSibling;
+          if (prev && prev.classList.contains('para-wrap')) prev.querySelector('.para').focus();
+        }
+        if (e.altKey && e.shiftKey && e.key === 'ArrowDown') {
+          e.preventDefault();
+          const clone = createPara(p.textContent);
+          wrap.after(clone);
+          clone.querySelector('.para').focus();
+          save();
+        }
+        if (e.altKey && e.shiftKey && e.key === 'ArrowUp') {
+          e.preventDefault();
+          const clone = createPara(p.textContent);
+          wrap.before(clone);
+          clone.querySelector('.para').focus();
+          save();
+        }
+        if (e.altKey && !e.shiftKey && e.key === 'ArrowDown') {
+          e.preventDefault();
+          const next = wrap.nextElementSibling;
+          if (next && next.classList.contains('para-wrap')) {
+            next.after(wrap);
+            p.focus();
+            save();
+          }
+        }
+        if (e.altKey && !e.shiftKey && e.key === 'ArrowUp') {
+          e.preventDefault();
+          const prev = wrap.previousElementSibling;
+          if (prev && prev.classList.contains('para-wrap')) {
+            prev.before(wrap);
+            p.focus();
+            save();
+          }
+        }
+        if (e.key === 'Delete') {
+          e.preventDefault();
+          const prev = wrap.previousElementSibling;
+          const next = wrap.nextElementSibling;
+          wrap.remove();
+          save();
+          if (next && next.classList.contains('para-wrap')) next.querySelector('.para').focus();
+          else if (prev && prev.classList.contains('para-wrap')) prev.querySelector('.para').focus();
+        }
+      } else {
+        // 編集モード
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          exitEdit(p);
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          exitEdit(p);
+          const next = wrap.nextElementSibling;
+          if (next && next.classList.contains('para-wrap')) {
+            next.querySelector('.para').focus();
+          } else {
+            const newWrap = createPara('');
+            note.appendChild(newWrap);
+            save();
+            const newP = newWrap.querySelector('.para');
+            newP.focus();
+            enterEdit(newP);
+          }
+        }
+        if (e.key === 'Backspace' && p.textContent === '') {
+          e.preventDefault();
+          const prev = wrap.previousElementSibling;
+          const next = wrap.nextElementSibling;
+          wrap.remove();
+          save();
+          if (prev && prev.classList.contains('para-wrap')) prev.querySelector('.para').focus();
+          else if (next && next.classList.contains('para-wrap')) next.querySelector('.para').focus();
+        }
+      }
+    });
+
+    // 段落自体をfocusable に
+    p.setAttribute('tabindex', '0');
+
+    p.addEventListener('dblclick', () => enterEdit(p));
+
+    p.addEventListener('focus', () => {
+      wrap.classList.add('focused');
+    });
+
+    // --- ドラッグ & ドロップ ---
+    handle.addEventListener('dragstart', (e) => {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', ''); // Firefox 対応
+      wrap.classList.add('dragging');
+      note.dataset.draggingId = [...note.children].indexOf(wrap);
+    });
+
+    handle.addEventListener('dragend', () => {
+      wrap.classList.remove('dragging');
+      document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+    });
+
+    wrap.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const dragging = note.querySelector('.dragging');
+      if (dragging && dragging !== wrap) {
+        wrap.classList.add('drag-over');
+      }
+    });
+
+    wrap.addEventListener('dragleave', () => {
+      wrap.classList.remove('drag-over');
+    });
+
+    wrap.addEventListener('drop', (e) => {
+      e.preventDefault();
+      wrap.classList.remove('drag-over');
+      const dragging = note.querySelector('.dragging');
+      if (dragging && dragging !== wrap) {
+        const allWraps = [...note.children];
+        const fromIdx = allWraps.indexOf(dragging);
+        const toIdx = allWraps.indexOf(wrap);
+        if (fromIdx < toIdx) {
+          wrap.after(dragging);
+        } else {
+          wrap.before(dragging);
+        }
+        save();
+      }
+    });
+
+    wrap.appendChild(handle);
+    wrap.appendChild(p);
+    return wrap;
+  }
+
+  function enterEdit(p) {
+    if (p.getAttribute('contenteditable') === 'true') return;
+    p.setAttribute('contenteditable', 'true');
+    p.focus();
+    // カーソルを末尾へ
+    const range = document.createRange();
+    const sel = window.getSelection();
+    range.selectNodeContents(p);
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    showBadge('EDIT');
+  }
+
+  function exitEdit(p) {
+    if (p.getAttribute('contenteditable') === 'false') return;
+    p.setAttribute('contenteditable', 'false');
+    p.focus();
+    save();
+    showBadge('VIEW');
+  }
+
+  function save() {
+    const paras = [...note.querySelectorAll('.para')].map(p => p.textContent);
+    localStorage.setItem('mynote_v1', JSON.stringify(paras));
+  }
+
+  function load() {
+    const raw = localStorage.getItem('mynote_v1');
+    return raw ? JSON.parse(raw) : defaultParas;
+  }
+
+  function init() {
+    const paras = load();
+    paras.forEach(text => {
+      note.appendChild(createPara(text));
+    });
+  }
+
+  document.getElementById('add-para').addEventListener('click', () => {
+    const wrap = createPara('');
+    note.appendChild(wrap);
+    save();
+    const p = wrap.querySelector('.para');
+    p.focus();
+    enterEdit(p);
+  });
+
+  init();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+# dependencies
+node_modules/
+
+# test artifacts (generated)
+tests/screenshots/
+tests/test_results.json
+test-results/
+
